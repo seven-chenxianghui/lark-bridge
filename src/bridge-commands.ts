@@ -12,10 +12,13 @@ export function p2pTopicKey(openId: string): string {
 export function gateInboundMessage(
 	chatType: string,
 	threadId?: string,
-	options?: { senderOpenId?: string },
+	options?: { senderOpenId?: string; ownerOpenId?: string },
 ): InboundGateResult {
 	if (chatType === "p2p" || chatType === "private") {
-		return { action: "reject", reason: "unsupported_chat", reply: "机器人仅在群聊话题中处理任务，请到群里 @机器人。" };
+		if (options?.senderOpenId && options.senderOpenId === options.ownerOpenId) {
+			return { action: "allow", topicKey: p2pTopicKey(options.senderOpenId) };
+		}
+		return { action: "reject", reason: "unsupported_chat", reply: "私聊仅限管理员使用，请到群聊话题中 @机器人。" };
 	}
 	if (chatType === "group" && threadId) return { action: "allow", topicKey: threadId };
 	if (chatType === "group") return { action: "reject", reason: "no_thread", reply: NO_THREAD_REPLY };
@@ -25,7 +28,6 @@ export function gateInboundMessage(
 export type BridgeCommand =
 	| { kind: "help" }
 	| { kind: "reset" }
-	| { kind: "context" }
 	| { kind: "status" }
 	| { kind: "stop" }
 	| { kind: "memorySearch"; query: string }
@@ -41,7 +43,6 @@ export function parseBridgeCommand(text: string): BridgeCommand {
 	if (!value.startsWith("/")) return { kind: "message" };
 	if (/^\/(help|帮助)(\s|$)/i.test(value)) return { kind: "help" };
 	if (/^\/(new|新对话|reset)(\s|$)/i.test(value)) return { kind: "reset" };
-	if (/^\/(context|上下文)(\s|$)/i.test(value)) return { kind: "context" };
 	if (/^\/(status|状态)(\s|$)/i.test(value)) return { kind: "status" };
 	if (/^\/(stop|终止|停止)(\s|$)/i.test(value)) return { kind: "stop" };
 	const plan = value.match(/^\/(?:plan|计划)\s+([\s\S]+)$/i);
@@ -61,7 +62,6 @@ export function bridgeHelpText(): string {
 		"**可用指令**",
 		"- `/help` `/帮助`：显示帮助",
 		"- `/new` `/新对话` `/reset`：重置当前会话",
-		"- `/context` `/上下文`：显示当前会话标识",
 		"- `/status` `/状态`：查看当前任务状态",
 		"- `/stop` `/终止`：终止当前任务",
 		"- `/plan <任务>` `/计划 <任务>`：先只读分析，批准后再执行",
@@ -70,15 +70,7 @@ export function bridgeHelpText(): string {
 		"- `/取消定时 <id>`：删除定时任务",
 		"- `/memory <关键词>` `/记忆 <关键词>`：查询当前话题的 SQLite 记忆",
 		"",
-		"仅支持群聊话题；请在话题中 @机器人发送文字、图片或文件。",
-	].join("\n");
-}
-
-export function formatContext(topicKey: string, sessionId?: string): string {
-	return [
-		"**当前会话**",
-		`- topic: \`${topicKey}\``,
-		`- Codex Session: ${sessionId ? `\`${sessionId}\`` : "尚未创建"}`,
+		"管理员可直接私聊；其他用户请在群聊话题中 @机器人发送文字、图片或文件。",
 	].join("\n");
 }
 

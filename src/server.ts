@@ -8,7 +8,6 @@ import { parseAuthorizationCardAction, parseTaskCardAction } from "./card-action
 import { loadCodexDisplayConfig } from "./codex-display-config.js";
 import {
 	bridgeHelpText,
-	formatContext,
 	gateInboundMessage,
 	parseBridgeCommand,
 	RESET_REPLY,
@@ -21,7 +20,7 @@ import { parseFeishuMessage } from "./feishu-message.js";
 import { createScheduler, formatDuration, parseDuration, type ScheduledTask } from "./scheduler.js";
 import { applyAgentEvent, createTaskProgress, renderProgress, renderTaskSummary, type TaskProgress } from "./task-progress.js";
 import { buildCard, type CardButton, type CardHeader } from "./feishu-card.js";
-import { buildTaskCardElements, taskCardSubtitle, type CardElement, type TaskCardMeta, type TaskCardState } from "./task-card.js";
+import { buildTaskCardElements, splitResultText, taskCardSubtitle, type CardElement, type TaskCardMeta, type TaskCardState } from "./task-card.js";
 import { createTaskCounter } from "./task-counter.js";
 import { createTopicSessionRepo } from "./topic-session.js";
 import { changedFiles, snapshotWorkspace } from "./workspace-changes.js";
@@ -86,15 +85,8 @@ type FeishuMention = { key?: string; id?: string | { open_id?: string }; name?: 
 
 function taskButtons(topicKey: string, running: boolean): CardButton[] {
 	return running
-		? [
-			{ text: "添加中途引导", action: "guide", topicKey },
-			{ text: "停止当前任务", action: "stop", topicKey, type: "danger" },
-		]
-		: [
-			{ text: "继续修改", action: "guide", topicKey },
-			{ text: "查看上下文", action: "context", topicKey },
-			{ text: "新建会话", action: "reset", topicKey, type: "primary" },
-		];
+		? [{ text: "停止当前任务", action: "stop", topicKey, type: "danger" }]
+		: [{ text: "新建会话", action: "reset", topicKey, type: "primary" }];
 }
 
 async function retry<T>(operation: () => Promise<T>): Promise<T> {
@@ -244,6 +236,13 @@ async function updateTaskCard(
 	return updateCard(cardId, "", taskHeader(state, meta), taskButtons(topicKey, state === "running"), buildTaskCardElements(meta, progress, state, summary));
 }
 
+async function deliverResultContinuations(messageId: string, text: string, title = "Codex Remote"): Promise<void> {
+	const chunks = splitResultText(text.trim());
+	for (let index = 1; index < chunks.length; index++) {
+		await replyCard(messageId, chunks[index], { title: `${title} · ${index + 1}/${chunks.length}` });
+	}
+}
+
 async function deliverTaskResult(
 	messageId: string,
 	cardId: string | undefined,
@@ -266,12 +265,7 @@ async function deliverTaskResult(
 			buildTaskCardElements(meta, progress, state, summary),
 		);
 	}
-	let remaining = result.slice(2600).trimStart();
-	while (remaining) {
-		const chunk = remaining.slice(0, 2900);
-		remaining = remaining.slice(chunk.length).trimStart();
-		await replyCard(messageId, chunk, { title: "Codex Remote · 继续", color: state === "complete" ? "green" : "red" });
-	}
+	await deliverResultContinuations(messageId, result);
 }
 
 function createProgressReporter(cardId: string | undefined, topicKey: string, meta: TaskCardMeta, progress: TaskProgress) {
@@ -500,7 +494,7 @@ async function executeGuidedTask(input: {
 			stopRequestedTopics.delete(input.topicKey);
 			memory.append(input.topicKey, "user", `[中途引导]\n${queuedGuide}`);
 			input.progress.phase = "queued";
-			input.progress.liveOutput = `${input.progress.liveOutput}${input.progress.liveOutput ? "\n\n" : ""}已收到中途引导，正在使用同一 Codex Session 继续执行。`;
+			input.progress.liveOutput = `${input.progress.liveOutput}${input.progress.liveOutput ? "\n\n" : ""}已收到补充指令，继续处理。`;
 			await updateTaskCard(input.cardId, input.topicKey, input.meta, input.progress, "running");
 			prompt = `[中途引导]\n${queuedGuide}`;
 			freshPrompt = `${formatMemory(memory.get(input.topicKey))}${prompt}`;
@@ -611,6 +605,7 @@ async function executePlanRequest(input: InboundMessage, request: string): Promi
 		const elements = buildTaskCardElements(meta, progress, "complete", "**下一步**\n批准后将在同一 Codex Session 中执行，并自动运行项目验收。");
 		if (cardId) await updateCard(cardId, "", header, buttons, elements);
 		else await replyCard(input.messageId, "", header, buttons, elements);
+		await deliverResultContinuations(input.messageId, output.result, "Codex Plan");
 	} catch (error) {
 		await reporter.close();
 		if (stopRequestedTopics.delete(input.topicKey)) {
@@ -618,8 +613,8 @@ async function executePlanRequest(input: InboundMessage, request: string): Promi
 			await updateTaskCard(cardId, input.topicKey, meta, progress, "stopped");
 			return;
 		}
-		const message = error instanceof Error ? error.message : String(error);
-		progress.liveOutput = `${progress.liveOutput}${progress.liveOutput ? "\n\n" : ""}计划分析失败：${message.slice(0, 1800)}`;
+		console.error("[计划] 分析失败", error);
+		progress.liveOutput = "计划分析失败，请查看本机日志。";
 		await updateTaskCard(cardId, input.topicKey, meta, progress, "failed");
 	} finally {
 		activeTaskViews.delete(input.topicKey);
@@ -658,8 +653,8 @@ async function executeApprovedPlan(messageId: string, topicKey: string, request:
 			await updateTaskCard(cardId, topicKey, meta, progress, "stopped");
 			return;
 		}
-		const message = error instanceof Error ? error.message : String(error);
-		progress.liveOutput = `${progress.liveOutput}${progress.liveOutput ? "\n\n" : ""}执行失败：${message.slice(0, 1800)}`;
+		console.error("[计划] 执行失败", error);
+		progress.liveOutput = "任务执行失败，请查看本机日志。";
 		await updateTaskCard(cardId, topicKey, meta, progress, "failed");
 	} finally {
 		activeTaskViews.delete(topicKey);
@@ -680,28 +675,20 @@ async function handleMessage(input: InboundMessage): Promise<void> {
 		pendingPlans.clear(input.topicKey);
 		return void await replyCard(input.messageId, RESET_REPLY, { title: "新会话" });
 	}
-	if (command.kind === "context") {
-		return void await replyCard(input.messageId, `${formatContext(input.topicKey, sessions.get(input.topicKey))}\n- Turn: ${taskCounter.get(input.topicKey)}\n- 记忆条数: ${memory.count(input.topicKey)}`, { title: "当前会话" });
-	}
 	if (command.kind === "status") {
 		const view = activeTaskViews.get(input.topicKey);
 		const pendingPlan = pendingPlans.get(input.topicKey);
 		const running = Boolean(view);
-		const latestTool = view?.progress.tools.at(-1);
 		return void await replyCard(
 			input.messageId,
 			[
 				"**当前话题**",
 				`- 状态：${running ? "Codex 正在执行" : "空闲"}`,
 				...(view ? [
-					`- 任务：\`${view.meta.taskId}\` · ${view.meta.request.slice(0, 120)}`,
-					`- 阶段：${view.progress.phase}`,
-					...(latestTool ? [`- 最近活动：${latestTool.status} · \`${latestTool.label.replace(/`/g, "'")}\``] : []),
+					`- 任务：${view.meta.request.slice(0, 80)}`,
 				] : []),
 				...(pendingPlan ? [`- 待批准计划：${pendingPlan.prompt.slice(0, 120)}`] : []),
 				`- Turn：${taskCounter.get(input.topicKey)}`,
-				`- Codex Session：${sessions.get(input.topicKey) ? `\`${sessions.get(input.topicKey)}\`` : "尚未创建"}`,
-				`- 记忆条数：${memory.count(input.topicKey)}`,
 			].join("\n"),
 			{ title: "任务状态", color: running ? "blue" : "green" },
 			taskButtons(input.topicKey, running),
@@ -716,9 +703,9 @@ async function handleMessage(input: InboundMessage): Promise<void> {
 		if (!command.query) {
 			return void await replyCard(input.messageId, `当前话题共有 **${total}** 条 SQLite 记忆。\n发送 \`/记忆 <关键词>\` 可查询。`, { title: "聊天记忆" });
 		}
-		const results = memory.search(input.topicKey, command.query, 5);
+		const results = memory.search(input.topicKey, command.query, 3);
 		const body = results.length
-			? results.map((item, index) => `${index + 1}. **${item.role === "user" ? "用户" : "Codex"}** · ${new Date(item.at).toLocaleString("zh-CN")}\n${item.text.slice(0, 600)}`).join("\n\n")
+			? results.map((item, index) => `${index + 1}. **${item.role === "user" ? "用户" : "Codex"}**\n${item.text.slice(0, 200)}`).join("\n\n")
 			: `没有找到与 **${command.query}** 相关的记忆。`;
 		return void await replyCard(input.messageId, body, { title: `记忆查询 · ${total} 条` });
 	}
@@ -751,8 +738,8 @@ async function handleMessage(input: InboundMessage): Promise<void> {
 		return void await replyCard(
 			input.messageId,
 			steered
-				? "已将补充指令实时注入当前 Codex Turn。"
-				: "已收到补充指令，当前阶段结束后会在同一个 Codex Session 中继续处理。",
+				? "已收到补充指令，正在处理。"
+				: "已收到补充指令，当前阶段结束后继续处理。",
 			{ title: "中途引导", color: "blue" },
 		);
 	}
@@ -822,10 +809,10 @@ async function handleMessage(input: InboundMessage): Promise<void> {
 			await updateTaskCard(cardId, input.topicKey, meta, progress, "stopped");
 			return;
 		}
-		const message = error instanceof Error ? error.message : String(error);
-		progress.liveOutput = `${progress.liveOutput}${progress.liveOutput ? "\n\n" : ""}执行失败：${message.slice(0, 1800)}`;
+		console.error("[任务] 执行失败", error);
+		progress.liveOutput = "任务执行失败，请查看本机日志。";
 		if (cardId) await updateTaskCard(cardId, input.topicKey, meta, progress, "failed");
-		else await replyCard(input.messageId, `执行失败：${message}`, { title: "失败", color: "red" });
+		else await replyCard(input.messageId, progress.liveOutput, { title: "失败", color: "red" });
 	} finally {
 		activeTaskViews.delete(input.topicKey);
 		steering.clear(input.topicKey);
@@ -865,8 +852,8 @@ async function executeScheduledTask(task: ScheduledTask): Promise<void> {
 			await updateTaskCard(cardId, task.topicKey, meta, progress, "stopped");
 			return;
 		}
-		const message = error instanceof Error ? error.message : String(error);
-		progress.liveOutput = `${progress.liveOutput}${progress.liveOutput ? "\n\n" : ""}执行失败：${message.slice(0, 1800)}`;
+		console.error("[定时任务] 执行失败", error);
+		progress.liveOutput = "任务执行失败，请查看本机日志。";
 		if (cardId) await updateTaskCard(cardId, task.topicKey, meta, progress, "failed");
 		throw error;
 	}
@@ -926,14 +913,6 @@ async function handleCardAction(data: unknown): Promise<Record<string, unknown> 
 		const stopped = requestStop(action.topicKey);
 		return { toast: { type: stopped ? "success" : "info", content: stopped ? "已请求停止任务" : "任务已经结束" } };
 	}
-	if (action.action === "guide") {
-		await replyCard(
-			action.messageId,
-			"请直接在当前话题回复补充指令；群聊中请 @机器人。任务执行中会立即作为中途引导接入原 Turn；任务结束后则会延续同一个 Codex Session 创建下一 Turn。",
-			{ title: "添加中途引导" },
-		);
-		return { toast: { type: "success", content: "请在当前话题发送补充指令" } };
-	}
 	if (action.action === "reset") {
 		if (activeTaskViews.has(action.topicKey)) {
 			return { toast: { type: "warning", content: "请先停止正在执行的任务" } };
@@ -945,12 +924,7 @@ async function handleCardAction(data: unknown): Promise<Record<string, unknown> 
 		await replyCard(action.messageId, RESET_REPLY, { title: "新会话" });
 		return { toast: { type: "success", content: "已创建新会话" } };
 	}
-	await replyCard(
-		action.messageId,
-		`${formatContext(action.topicKey, sessions.get(action.topicKey))}\n- Turn: ${taskCounter.get(action.topicKey)}\n- 记忆条数: ${memory.count(action.topicKey)}`,
-		{ title: "当前会话" },
-	);
-	return { toast: { type: "success", content: "已发送会话信息" } };
+	return undefined;
 }
 
 const dispatcher = new Lark.EventDispatcher({});
@@ -977,18 +951,13 @@ dispatcher.register({
 			const parsed = parseFeishuMessage(messageType, String(message.content || ""));
 			let text = parsed.text;
 
-			if (chatType === "p2p" || chatType === "private") {
-				await replyCard(messageId, "机器人仅在群聊话题中处理任务，请到群里 @机器人。", { title: "仅限群聊", color: "orange" });
-				return;
-			}
-
 			if (chatType === "group") {
 				if (!botOpenId && !botName) await loadBotIdentity();
 				if (messageType !== "image" && messageType !== "file" && !isBotMentioned(mentions)) return;
 				text = stripMentions(text, mentions);
 			}
 
-			const gate = gateInboundMessage(chatType, threadId, { senderOpenId });
+			const gate = gateInboundMessage(chatType, threadId, { senderOpenId, ownerOpenId: access.ownerOpenId() });
 			if (gate.action === "reject") {
 				await replyCard(messageId, gate.reply, { title: "无法处理", color: "orange" });
 				return;

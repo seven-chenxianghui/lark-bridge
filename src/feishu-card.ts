@@ -10,7 +10,7 @@ export type CardHeader = {
 
 export type CardButton = {
 	text: string;
-	action?: "stop" | "reset" | "context" | "guide" | "approve-plan" | "discard-plan" | "approve-access" | "reject-access";
+	action?: "stop" | "reset" | "approve-plan" | "discard-plan" | "approve-access" | "reject-access";
 	topicKey?: string;
 	value?: Record<string, string>;
 	type?: "default" | "primary" | "danger";

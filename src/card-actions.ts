@@ -1,5 +1,5 @@
 export type TaskCardAction = {
-	action: "stop" | "reset" | "context" | "guide" | "approve-plan" | "discard-plan";
+	action: "stop" | "reset" | "approve-plan" | "discard-plan";
 	topicKey: string;
 	messageId: string;
 };
@@ -35,6 +35,6 @@ export function parseTaskCardAction(data: unknown): TaskCardAction | undefined {
 	const kind = String(value?.action || "");
 	const topicKey = String(value?.topicKey || "");
 	const messageId = String(context?.open_message_id || event.open_message_id || "");
-	if (!messageId || !topicKey || !["stop", "reset", "context", "guide", "approve-plan", "discard-plan"].includes(kind)) return undefined;
+	if (!messageId || !topicKey || !["stop", "reset", "approve-plan", "discard-plan"].includes(kind)) return undefined;
 	return { action: kind as TaskCardAction["action"], topicKey, messageId };
 }

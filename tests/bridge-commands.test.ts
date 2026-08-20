@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
 	bridgeHelpText,
-	formatContext,
 	gateInboundMessage,
 	parseBridgeCommand,
 	p2pTopicKey,
@@ -9,10 +8,18 @@ import {
 import { getTopicKey } from "../src/topic-agent.ts";
 
 describe("inbound gate", () => {
-	test("rejects private chats", () => {
-		expect(gateInboundMessage("p2p", undefined, { senderOpenId: "ou_a" }).action).toBe("reject");
+	test("allows owner private chats", () => {
+		expect(gateInboundMessage("p2p", undefined, { senderOpenId: "ou_owner", ownerOpenId: "ou_owner" }))
+			.toEqual({ action: "allow", topicKey: "p2p:ou_owner" });
 		expect(p2pTopicKey("ou_b")).toBe("p2p:ou_b");
 		expect(getTopicKey("private", undefined, "ou_a")).toBe("p2p:ou_a");
+	});
+
+	test("rejects non-owner private chats", () => {
+		expect(gateInboundMessage("private", undefined, { senderOpenId: "ou_user", ownerOpenId: "ou_owner" }).action)
+			.toBe("reject");
+		expect(gateInboundMessage("p2p", undefined, { senderOpenId: "ou_owner" }).action)
+			.toBe("reject");
 	});
 
 	test("accepts group topics and rejects unthreaded groups", () => {
@@ -26,7 +33,7 @@ describe("bridge commands", () => {
 	test("parses supported commands", () => {
 		expect(parseBridgeCommand("/help")).toEqual({ kind: "help" });
 		expect(parseBridgeCommand("/新对话")).toEqual({ kind: "reset" });
-		expect(parseBridgeCommand("/context")).toEqual({ kind: "context" });
+		expect(parseBridgeCommand("/context")).toEqual({ kind: "unknown", cmd: "/context" });
 		expect(parseBridgeCommand("/memory 项目检查")).toEqual({ kind: "memorySearch", query: "项目检查" });
 		expect(parseBridgeCommand("/记忆")).toEqual({ kind: "memorySearch", query: "" });
 		expect(parseBridgeCommand("/状态")).toEqual({ kind: "status" });
@@ -39,7 +46,7 @@ describe("bridge commands", () => {
 		expect(parseBridgeCommand("/other")).toEqual({ kind: "unknown", cmd: "/other" });
 	});
 
-	test("help and context only expose the minimal surface", () => {
+	test("help only exposes the minimal command surface", () => {
 		const help = bridgeHelpText();
 		expect(help).toContain("/help");
 		expect(help).toContain("/reset");
@@ -47,6 +54,6 @@ describe("bridge commands", () => {
 		expect(help).toContain("/memory");
 		expect(help).toContain("/定时");
 		expect(help).not.toContain("心跳");
-		expect(formatContext("omt_1", "session_1")).toContain("session_1");
+		expect(help).not.toContain("/context");
 	});
 });

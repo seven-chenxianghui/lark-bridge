@@ -9,13 +9,6 @@ describe("task card actions", () => {
 		})).toEqual({ action: "stop", topicKey: "omt_1", messageId: "om_1" });
 	});
 
-	test("accepts the guide action", () => {
-		expect(parseTaskCardAction({
-			context: { open_message_id: "om_2" },
-			action: { value: { action: "guide", topicKey: "omt_2" } },
-		})?.action).toBe("guide");
-	});
-
 	test("accepts plan approval actions", () => {
 		expect(parseTaskCardAction({
 			context: { open_message_id: "om_plan" },
@@ -25,6 +18,8 @@ describe("task card actions", () => {
 
 	test("rejects incomplete or unknown actions", () => {
 		expect(parseTaskCardAction({ action: { value: { action: "delete", topicKey: "omt_1" } } })).toBeUndefined();
+		expect(parseTaskCardAction({ context: { open_message_id: "om_2" }, action: { value: { action: "guide", topicKey: "omt_2" } } })).toBeUndefined();
+		expect(parseTaskCardAction({ context: { open_message_id: "om_3" }, action: { value: { action: "context", topicKey: "omt_3" } } })).toBeUndefined();
 		expect(parseTaskCardAction(null)).toBeUndefined();
 	});
 });
