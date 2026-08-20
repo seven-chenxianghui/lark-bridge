@@ -1,12 +1,5 @@
 .DS_Store
-Users/
-config/easygo.env
+/config/bridge.env
+/node_modules/
+/.firecrawl/
 *.log
-__pycache__/
-
-# 仓根目录下 Claw 引擎与运行时（install 生成，不入库）
-/claw/
-/runtime/
-/inbox
-/projects.json
-.memory.sqlite*

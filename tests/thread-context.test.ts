@@ -4,14 +4,14 @@ import {
 	formatThreadContextBlock,
 	isolationBanner,
 	type FeishuMessageLike,
-} from "../templates/claw/thread-context.ts";
+} from "../src/thread-context.ts";
 
 describe("thread-context isolation", () => {
-	test("isolation banner forbids 小组旁观 paths", () => {
+	test("isolation banner restricts access to the current topic", () => {
 		const b = isolationBanner("oc_abc", "omt_1");
 		expect(b).toContain("chat_id=oc_abc");
-		expect(b).toContain("文档/小组旁观/");
-		expect(b).toContain("state/xiaozu-groups/");
+		expect(b).toContain("当前群/话题");
+		expect(b).toContain("其它群");
 		expect(b).toContain("禁止");
 	});
 
@@ -36,11 +36,11 @@ describe("thread-context isolation", () => {
 			},
 		];
 		const block = formatThreadContextBlock(messages, {
-			chatId: "oc_easygo",
+			chatId: "oc_bridge",
 			threadId: "omt_t",
 			currentMessageId: "om_cur",
 		});
-		expect(block).toContain("oc_easygo");
+		expect(block).toContain("oc_bridge");
 		expect(block).toContain("@陈颖 能不能自己搭一套前端");
 		expect(block).not.toContain("查看下对话的上下文");
 		expect(block).not.toContain("老化测试");
@@ -50,8 +50,8 @@ describe("thread-context isolation", () => {
 	test("extractMessageText resolves mentions", () => {
 		const text = extractMessageText({
 			body: { content: JSON.stringify({ text: "hi @_user_1" }) },
-			mentions: [{ key: "@_user_1", name: "达妮娅" }],
+			mentions: [{ key: "@_user_1", name: "Bot" }],
 		});
-		expect(text).toBe("hi @达妮娅");
+		expect(text).toBe("hi @Bot");
 	});
 });

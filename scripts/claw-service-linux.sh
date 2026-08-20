@@ -1,49 +1,30 @@
 #!/usr/bin/env bash
-# 秧秧 Claw — systemd 用户服务（Linux 常开主机）
 set -euo pipefail
 
-PACK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_FILE="${PACK_ROOT}/config/easygo.env"
-
-if [[ -f "${CONFIG_FILE}" ]]; then
-  # shellcheck disable=SC1090
-  source "${CONFIG_FILE}"
-fi
-
-CLAW_INSTALL_DIR="${CLAW_INSTALL_DIR:-${PACK_ROOT}/claw}"
-RUNTIME_DIR="${RUNTIME_DIR:-${EASYGO_CLAW_ROOT:-${PACK_ROOT}/runtime}}"
-
-UNIT_NAME="${SYSTEMD_UNIT:-lark-assistant.service}"
-LABEL="${SERVICE_LABEL:-com.ic.lark-assistant}"
-SERVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-UNIT_PATH="${SERVICE_DIR}/${UNIT_NAME}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNTIME_DIR="${RUNTIME_DIR:-${HOME}/.seven-lark-runtime}"
+UNIT_NAME="feishu-claw.service"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT_PATH="${UNIT_DIR}/${UNIT_NAME}"
+LOG_FILE="${RUNTIME_DIR}/logs/bridge.log"
 BUN_BIN="$(command -v bun 2>/dev/null || echo "$HOME/.bun/bin/bun")"
-LOG_FILE="${RUNTIME_DIR}/logs/feishu-cursor.log"
 
-mkdir -p "${RUNTIME_DIR}/logs" "${SERVICE_DIR}"
-
-generate_unit() {
-  cat > "$UNIT_PATH" <<UNIT
+write_unit() {
+  mkdir -p "${UNIT_DIR}" "${RUNTIME_DIR}/logs" "${RUNTIME_DIR}/state"
+  cat > "${UNIT_PATH}" <<UNIT
 [Unit]
-Description=Feishu Cursor Claw (${LABEL})
+Description=Seven Lark Bridge
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=${CLAW_INSTALL_DIR}
+WorkingDirectory=${ROOT}
 Environment=HOME=${HOME}
+Environment=RUNTIME_DIR=${RUNTIME_DIR}
 Environment=PATH=${HOME}/.bun/bin:${HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin
-# 勿继承 ~/.bashrc 里 Mac 直连代理（192.168.2.1:7897）；内网时会导致飞书 WS 超时
-Environment=http_proxy=
-Environment=https_proxy=
-Environment=all_proxy=
-Environment=HTTP_PROXY=
-Environment=HTTPS_PROXY=
-Environment=ALL_PROXY=
-Environment=no_proxy=artifactory.sr,nexus3.sr,git.standard-robots.com,.sr,192.168.0.0/16,localhost,127.0.0.1,open.feishu.cn,open.larksuite.com
 UnsetEnvironment=http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-ExecStart=/bin/bash --noprofile --norc -c 'unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY; exec ${BUN_BIN} run ${CLAW_INSTALL_DIR}/start.ts'
+ExecStart=${BUN_BIN} run ${ROOT}/src/server.ts
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:${LOG_FILE}
@@ -52,81 +33,37 @@ StandardError=append:${LOG_FILE}
 [Install]
 WantedBy=default.target
 UNIT
-  echo "  unit: ${UNIT_PATH}"
-  echo "  日志: ${LOG_FILE}"
-}
-
-cmd_install() {
-  echo "安装秧秧 Claw systemd 用户服务..."
-  # 登录 shell 可能把 Mac 直连代理导入 user manager，内网时会弄断飞书 WS
-  systemctl --user unset-environment http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY 2>/dev/null || true
-  generate_unit
-  systemctl --user daemon-reload
-  systemctl --user enable "${UNIT_NAME}"
-  systemctl --user restart "${UNIT_NAME}"
-  echo "  服务已启用并重启"
-  echo "  提示: 若希望登出后仍运行，执行: loginctl enable-linger \$USER"
-}
-
-cmd_uninstall() {
-  systemctl --user disable --now "${UNIT_NAME}" 2>/dev/null || true
-  rm -f "$UNIT_PATH"
-  systemctl --user daemon-reload
-  echo "  服务已卸载"
-}
-
-cmd_start() {
-  systemctl --user start "${UNIT_NAME}" && echo "  已启动"
-}
-
-cmd_stop() {
-  systemctl --user stop "${UNIT_NAME}" && echo "  已停止"
-}
-
-cmd_restart() {
-  systemctl --user restart "${UNIT_NAME}" && echo "  已重启"
-}
-
-# Agent 改完桥接后请用这个，勿在任务中途直接 restart（会 SIGTERM 杀掉自己）
-cmd_restart_defer() {
-  local sec="${1:-20}"
-  if ! [[ "${sec}" =~ ^[0-9]+$ ]] || [[ "${sec}" -lt 3 ]]; then
-    echo "用法: bash $0 restart-defer [秒数≥3]" >&2
-    exit 1
-  fi
-  # 脱离服务 cgroup，定时器存活于 user manager，不受本次 stop 影响
-  if command -v systemd-run >/dev/null 2>&1; then
-    systemd-run --user --on-active="${sec}s" --timer-property=AccuracySec=1s \
-      /bin/systemctl --user restart "${UNIT_NAME}" >/dev/null
-  else
-    nohup bash -c "sleep ${sec}; systemctl --user restart '${UNIT_NAME}'" >/dev/null 2>&1 &
-    disown 2>/dev/null || true
-  fi
-  echo "  已安排 ${sec}s 后重启 ${UNIT_NAME}（当前任务可先跑完）"
-}
-
-cmd_status() {
-  echo "秧秧 Claw (${UNIT_NAME})"
-  echo "  仓库: ${PACK_ROOT}"
-  systemctl --user status "${UNIT_NAME}" --no-pager 2>/dev/null || echo "  状态: 未安装"
-  echo "  日志: ${LOG_FILE}"
-}
-
-cmd_logs() {
-  [[ -f "${LOG_FILE}" ]] && tail -f "${LOG_FILE}" || echo "  日志不存在: ${LOG_FILE}"
 }
 
 case "${1:-}" in
-  install)   cmd_install ;;
-  uninstall) cmd_uninstall ;;
-  start)     cmd_start ;;
-  stop)      cmd_stop ;;
-  restart)   cmd_restart ;;
-  restart-defer) cmd_restart_defer "${2:-20}" ;;
-  status)    cmd_status ;;
-  logs)      cmd_logs ;;
+  install)
+    write_unit
+    systemctl --user daemon-reload
+    systemctl --user enable --now "${UNIT_NAME}"
+    echo "Installed ${UNIT_NAME}"
+    ;;
+  uninstall)
+    systemctl --user disable --now "${UNIT_NAME}" 2>/dev/null || true
+    rm -f "${UNIT_PATH}"
+    systemctl --user daemon-reload
+    ;;
+  start|stop|restart)
+    systemctl --user "$1" "${UNIT_NAME}"
+    ;;
+  restart-defer)
+    delay="${2:-20}"
+    [[ "${delay}" =~ ^[0-9]+$ && "${delay}" -ge 3 ]] || { echo "Delay must be at least 3 seconds" >&2; exit 1; }
+    systemd-run --user --on-active="${delay}s" /bin/systemctl --user restart "${UNIT_NAME}" >/dev/null
+    echo "Restart scheduled in ${delay} seconds"
+    ;;
+  status)
+    systemctl --user status "${UNIT_NAME}" --no-pager
+    ;;
+  logs)
+    tail -f "${LOG_FILE}"
+    ;;
   *)
-    echo "用法: bash ${PACK_ROOT}/scripts/claw-service-linux.sh <install|status|logs|restart|restart-defer|...>"
-    echo "日志: ${LOG_FILE}"
+    echo "Usage: $0 <install|uninstall|start|stop|restart|restart-defer|status|logs>" >&2
+    exit 1
     ;;
 esac

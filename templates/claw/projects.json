@@ -1,9 +1,0 @@
-{
-  "projects": {
-    "easygo": {
-      "path": "__RUNTIME_DIR__",
-      "description": "EasyGo 前后端 + 飞书桥接（runtime symlink 根）"
-    }
-  },
-  "default_project": "easygo"
-}

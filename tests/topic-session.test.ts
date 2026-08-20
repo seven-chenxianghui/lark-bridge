@@ -11,7 +11,7 @@ import {
 	saveTopicSessions,
 	topicSessionsPath,
 	createTopicSessionRepo,
-} from "../templates/claw/topic-session.ts";
+} from "../src/topic-session.ts";
 
 describe("Topic Session binding", () => {
 	test("empty store has no binding", () => {

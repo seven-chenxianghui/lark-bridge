@@ -3,9 +3,7 @@ import {
 	acquireTopicParallelSlot,
 	__resetTopicParallelSlotsForTests,
 	MAX_TOPIC_PARALLEL,
-	isSimLaunchIntent,
-	simHostBusyMessage,
-} from "../templates/claw/topic-agent.ts";
+} from "../src/topic-agent.ts";
 
 describe("Topic Parallelism", () => {
 	beforeEach(() => {
@@ -44,16 +42,5 @@ describe("Topic Parallelism", () => {
 		expect(fourth).toBe(true);
 		r4();
 		for (const r of releases.slice(1)) r();
-	});
-});
-
-describe("Sim Mutex intent", () => {
-	test("detects sim launch intent", () => {
-		expect(isSimLaunchIntent("帮我启动仿真")).toBe(true);
-		expect(isSimLaunchIntent("查一下 git status")).toBe(false);
-	});
-
-	test("busy message mentions single sim", () => {
-		expect(simHostBusyMessage()).toContain("只能跑一个仿真");
 	});
 });

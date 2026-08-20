@@ -1,10 +1,16 @@
 {
-  "name": "easygo-lark-bridge",
+  "name": "seven-lark-bridge",
   "private": true,
   "type": "module",
-  "scripts": {
-    "test": "bun test ./tests"
-  },
+	"scripts": {
+		"start": "bun run src/server.ts",
+		"ready": "bun run scripts/check-readiness.ts",
+		"test": "bun test ./tests",
+		"verify": "node scripts/verify.mjs"
+	},
+	"dependencies": {
+		"@larksuiteoapi/node-sdk": "^1.59.0"
+	},
   "devDependencies": {
     "@types/bun": "latest"
   }
