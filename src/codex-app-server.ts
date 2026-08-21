@@ -17,6 +17,8 @@ type ActiveTurn = {
 	turnId?: string;
 	interruptRequested: boolean;
 	text: string;
+	messagePhases: Map<string, string>;
+	streamedMessageIds: Set<string>;
 	usage?: Record<string, number>;
 	onEvent?: (event: CodexStreamEvent) => void;
 	resolve: (value: CodexTurnResult) => void;
@@ -227,16 +229,43 @@ export class CodexAppServer {
 		}
 		if (method === "item/agentMessage/delta") {
 			const delta = String(params.delta || "");
-			active.text += delta;
-			if (delta) active.onEvent?.({ type: "assistant_delta", text: delta });
+			const itemId = String(params.itemId || "");
+			const phase = active.messagePhases.get(itemId);
+			if (itemId) active.streamedMessageIds.add(itemId);
+			if (delta && phase === "commentary") active.onEvent?.({ type: "commentary_delta", text: delta });
+			else if (delta) {
+				active.text += delta;
+				active.onEvent?.({ type: "assistant_delta", text: delta });
+			}
+			return;
+		}
+		if (method === "item/reasoning/summaryTextDelta" || method === "item/plan/delta") {
+			const delta = String(params.delta || "");
+			if (delta) active.onEvent?.({ type: "commentary_delta", text: delta });
 			return;
 		}
 		if (method === "item/started" || method === "item/completed") {
 			const item = params.item as Record<string, unknown> | undefined;
 			if (!item) return;
-			if (item.type === "agentMessage" && method === "item/completed" && !active.text) {
-				active.text = String(item.text || "");
-				if (active.text) active.onEvent?.({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: active.text }] } });
+			if (item.type === "agentMessage") {
+				const itemId = String(item.id || "");
+				const phase = String(item.phase || "");
+				if (method === "item/started") {
+					if (itemId) active.messagePhases.set(itemId, phase);
+					return;
+				}
+				if (itemId && !active.streamedMessageIds.has(itemId)) {
+					const text = String(item.text || "");
+					if (text && phase === "commentary") active.onEvent?.({ type: "commentary_delta", text });
+					else if (text) {
+						active.text += text;
+						active.onEvent?.({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+					}
+				}
+				if (itemId) {
+					active.messagePhases.delete(itemId);
+					active.streamedMessageIds.delete(itemId);
+				}
 				return;
 			}
 			const event = toolEvent(item, method === "item/started" ? "started" : "completed");
@@ -324,6 +353,8 @@ export class CodexAppServer {
 			threadId,
 			interruptRequested: false,
 			text: "",
+			messagePhases: new Map(),
+			streamedMessageIds: new Set(),
 			onEvent: input.onEvent,
 			resolve: resolveTurn,
 			reject: rejectTurn,
@@ -341,6 +372,7 @@ export class CodexAppServer {
 				cwd: this.options.cwd,
 				approvalPolicy: "never",
 				sandboxPolicy: buildSandboxPolicy(input.mode, this.options.writableRoot, this.options.platform),
+				summary: "detailed",
 			});
 			active.turnId = response.turn.id;
 			if (active.interruptRequested) await this.interrupt(input.topicKey);
@@ -382,6 +414,17 @@ export class CodexAppServer {
 		} catch {
 			return false;
 		}
+	}
+
+	async archiveThread(threadId: string): Promise<void> {
+		if (this.activeByThread.has(threadId)) throw new Error("Cannot archive a Codex thread with an active turn");
+		await this.request("thread/archive", { threadId });
+		this.loadedThreads.delete(threadId);
+	}
+
+	async unarchiveThread(threadId: string): Promise<void> {
+		await this.request("thread/unarchive", { threadId });
+		this.loadedThreads.delete(threadId);
 	}
 
 	close(): void {

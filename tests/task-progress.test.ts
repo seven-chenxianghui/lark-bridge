@@ -44,6 +44,24 @@ describe("task progress", () => {
 		expect(progress.liveOutput).toBe("正在处理");
 	});
 
+	test("keeps reasoning summaries and tools in chronological order", () => {
+		const progress = createTaskProgress(1_000);
+		applyAgentEvent(progress, { type: "commentary_delta", text: "先检查" });
+		applyAgentEvent(progress, { type: "commentary_delta", text: "配置。" });
+		applyAgentEvent(progress, {
+			type: "tool_call",
+			subtype: "started",
+			tool_call: { shellToolCall: { args: { command: "npm test" } } },
+		});
+		applyAgentEvent(progress, { type: "commentary_delta", text: "测试后继续。" });
+
+		expect(progress.activities).toEqual([
+			{ kind: "commentary", text: "先检查配置。" },
+			{ kind: "tool", label: "npm test", status: "running" },
+			{ kind: "commentary", text: "测试后继续。" },
+		]);
+	});
+
 	test("renders elapsed time and final changes", () => {
 		const progress = createTaskProgress(Date.now() - 65_000);
 		expect(formatElapsed(0, 65_000)).toBe("01:05");

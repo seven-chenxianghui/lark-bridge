@@ -1,5 +1,8 @@
 export type ToolStatus = "running" | "success" | "failed";
 export type ToolActivity = { label: string; status: ToolStatus };
+export type ProgressActivity =
+	| { kind: "commentary"; text: string }
+	| { kind: "tool"; label: string; status: ToolStatus };
 
 export type TaskProgress = {
 	startedAt: number;
@@ -8,6 +11,7 @@ export type TaskProgress = {
 	toolCalls: number;
 	toolFailures: number;
 	tools: ToolActivity[];
+	activities: ProgressActivity[];
 	firstOutputAt?: number;
 	liveOutput: string;
 	inputTokens?: number;
@@ -17,7 +21,15 @@ export type TaskProgress = {
 };
 
 export function createTaskProgress(now = Date.now()): TaskProgress {
-	return { startedAt: now, phase: "queued", toolCalls: 0, toolFailures: 0, tools: [], liveOutput: "" };
+	return { startedAt: now, phase: "queued", toolCalls: 0, toolFailures: 0, tools: [], activities: [], liveOutput: "" };
+}
+
+function appendCommentary(progress: TaskProgress, text: string): void {
+	if (!text) return;
+	const last = progress.activities.at(-1);
+	if (last?.kind === "commentary") last.text = `${last.text}${text}`.slice(-2_400);
+	else progress.activities.push({ kind: "commentary", text: text.slice(-2_400) });
+	progress.activities = progress.activities.slice(-12);
 }
 
 function toolLabel(event: Record<string, unknown>): string {
@@ -33,6 +45,10 @@ function toolLabel(event: Record<string, unknown>): string {
 export function applyAgentEvent(progress: TaskProgress, event: Record<string, unknown>, now = Date.now()): void {
 	if (event.type === "system" && event.session_id) progress.sessionId = String(event.session_id);
 	if (event.type === "thinking") progress.phase = "analyzing";
+	if (event.type === "commentary_delta") {
+		progress.phase = "analyzing";
+		appendCommentary(progress, String(event.text || ""));
+	}
 	if (event.type === "assistant_delta") {
 		progress.phase = "finishing";
 		const text = String(event.text || "");
@@ -57,12 +73,17 @@ export function applyAgentEvent(progress: TaskProgress, event: Record<string, un
 			progress.toolCalls++;
 			progress.tools.push({ label, status: "running" });
 			progress.tools = progress.tools.slice(-6);
+			progress.activities.push({ kind: "tool", label, status: "running" });
+			progress.activities = progress.activities.slice(-12);
 		} else if (event.subtype === "completed") {
 			const calls = event.tool_call as Record<string, { result?: Record<string, unknown> }> | undefined;
 			const failed = Boolean(calls && Object.values(calls)[0]?.result?.error);
 			const target = [...progress.tools].reverse().find((tool) => tool.status === "running" && tool.label === label);
 			if (target) target.status = failed ? "failed" : "success";
 			else progress.tools.push({ label, status: failed ? "failed" : "success" });
+			const activity = [...progress.activities].reverse().find((item) => item.kind === "tool" && item.status === "running" && item.label === label);
+			if (activity?.kind === "tool") activity.status = failed ? "failed" : "success";
+			else progress.activities.push({ kind: "tool", label, status: failed ? "failed" : "success" });
 			if (failed) progress.toolFailures++;
 		}
 	}
